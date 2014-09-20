@@ -104,7 +104,7 @@ func Test_calculatePayloadHash(t *testing.T) {
 	}
 }
 
-func Test_calculateRequestSignature(t *testing.T) {
+func Test_calculateRequestSignatureWithGET(t *testing.T) {
 	r, err := http.NewRequest("GET", "http://example.com:8000/resource/1?b=1&a=2", nil)
 	if err != nil {
 		t.Error(err)
@@ -130,6 +130,40 @@ func Test_calculateRequestSignature(t *testing.T) {
 	}
 
 	expectedMac, _ := base64.StdEncoding.DecodeString("6R4rV5iE+NPoym+WwjeHzjAGXUtLNIxmo1vpMofpLAE=")
+	if !bytes.Equal(mac, expectedMac) {
+		t.Error("Mac mismatch")
+	}
+}
+
+func Test_calculateRequestSignatureWithPOST(t *testing.T) {
+	r, err := http.NewRequest("POST", "http://example.com:8000/resource/1?b=1&a=2", strings.NewReader("Thank you for flying Hawk"))
+	if err != nil {
+		t.Error(err)
+	}
+	r.Header.Add("Content-Type", "text/plain")
+
+	payloadHash, _ := base64.StdEncoding.DecodeString("Yi9LfIIFRtBEPt74PVmbTF/xVAwPn7ub15ePICfgnuY=")
+
+	parameters := Parameters{
+		Timestamp: 1353832234,
+		Ext:       "some-app-ext-data",
+		Nonce:     "j4h3g2",
+		Hash:      payloadHash,
+		// TODO: Rest is not important for this test
+	}
+
+	credentials := Credentials{
+		KeyIdentifier: "dh37fgj492je",
+		Key:           []byte("werxhqb98rpaxn39848xrunpaw3489ruxnpa98w4rxn"),
+		Algorithm:     "sha256",
+	}
+
+	mac, err := calculateRequestSignature(r, parameters, credentials)
+	if err != nil {
+		t.Error(err)
+	}
+
+	expectedMac, _ := base64.StdEncoding.DecodeString("aSe1DERmZuRl3pI36/9BdZmnErTw3sNzOOAUlfeKjVw=")
 	if !bytes.Equal(mac, expectedMac) {
 		t.Error("Mac mismatch")
 	}
