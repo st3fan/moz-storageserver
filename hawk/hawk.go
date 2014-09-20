@@ -190,29 +190,27 @@ func getRequestContentType(r *http.Request) string {
 	return r.Header.Get("Content-Type")
 }
 
-func calculatePayloadHash(r *http.Request, parameters Parameters) ([]byte, error) {
-	var body []byte
-	if parameters.Hash != nil {
-		readBody, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return nil, err
-		}
-		body = readBody
+func calculatePayloadHash(r *http.Request) ([]byte, error) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		return nil, err
 	}
 
 	r.Body = NewClosingBytesReader(body)
 
 	hash := sha256.New()
-	hash.Sum([]byte("hawk.1.payload"))
-	hash.Sum([]byte(getRequestContentType(r)))
-	hash.Sum(body)
+	hash.Write([]byte("hawk.1.payload\n"))
+	hash.Write([]byte(getRequestContentType(r)))
+	hash.Write([]byte("\n"))
+	hash.Write(body)
+	hash.Write([]byte("\n"))
 	return hash.Sum(nil), nil
 }
 
 func calculateRequestSignature(r *http.Request, parameters Parameters, credentials Credentials) ([]byte, error) {
 	var encodedPayloadHash string
 	if len(parameters.Hash) != 0 {
-		payloadHash, err := calculatePayloadHash(r, parameters)
+		payloadHash, err := calculatePayloadHash(r)
 		if err != nil {
 			return nil, err
 		}
