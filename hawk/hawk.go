@@ -223,6 +223,8 @@ func calculateRequestSignature(r *http.Request, parameters Parameters, credentia
 		parameters.Nonce,
 		r.Method,
 		getRequestPath(r),
+		getRequestHost(r),
+		strconv.Itoa(getRequestPort(r)),
 		encodedPayloadHash,
 		parameters.Ext,
 	}
