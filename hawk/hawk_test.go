@@ -7,6 +7,8 @@ package hawk
 import (
 	"bytes"
 	"encoding/hex"
+	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -40,5 +42,63 @@ func Test_parseParameters(t *testing.T) {
 	expectedMac, _ := hex.DecodeString("6927b50c446666e465de9237ebff417599a712b4f0dec37338e01495f78a8d5c")
 	if !bytes.Equal(parameters.Mac, expectedMac) {
 		t.Error("mac mismatch")
+	}
+}
+
+func Test_validateParameters(t *testing.T) {
+}
+
+func Test_getRequestHost(t *testing.T) {
+	test := func(url string, expectedHost string, headers map[string]string) {
+		request, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			t.Error(err)
+		}
+		host := getRequestHost(request)
+		if host != expectedHost {
+			t.Errorf("Expected host %s for %s but got %s", expectedHost, url, host)
+		}
+	}
+	test("http://localhost/foo", "localhost", nil)
+	test("https://127.0.0.1/foo", "127.0.0.1", nil)
+	test("http://localhost:8080/foo", "localhost", nil)
+	test("https://127.0.0.1:8443/foo", "127.0.0.1", nil)
+	// TODO: Add tests here that mimic a typical front proxy (X-Forwarded-Proto?)
+	test("http://localhost/foo", "localhost", map[string]string{})
+	test("https://127.0.0.1/foo", "127.0.0.1", map[string]string{})
+	test("http://localhost:8080/foo", "localhost", map[string]string{})
+	test("https://127.0.0.1:8443/foo", "127.0.0.1", map[string]string{})
+}
+
+func Test_getRequestPort(t *testing.T) {
+	test := func(url string, expectedPort int) {
+		request, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			t.Error(err)
+		}
+		port := getRequestPort(request)
+		if port != expectedPort {
+			t.Errorf("Expected port %d for %s but got %d", expectedPort, url, port)
+		}
+	}
+	test("http://localhost/foo", 80)
+	test("https://localhost/foo", 443)
+	test("http://localhost:8080/foo", 8080)
+	test("https://localhost:8443/foo", 8443)
+}
+
+func Test_calculatePayloadHash(t *testing.T) {
+	r, err := http.NewRequest("POST", "http://localhost", strings.NewReader("Thank you for flying Hawk"))
+	if err != nil {
+		t.Error(err)
+	}
+	r.Header.Add("Content-Type", "text/plain")
+	hash, err := calculatePayloadHash(r)
+	if err != nil {
+		t.Error(err)
+	}
+	expectedHash, _ := hex.DecodeString("622f4b7c820546d0443edef83d599b4c5ff1540c0f9fbb9bd7978f2027e09ee6")
+	if !bytes.Equal(hash, expectedHash) {
+		t.Error("Hash mismatch")
 	}
 }
