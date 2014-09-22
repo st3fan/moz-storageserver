@@ -10,5 +10,5 @@ before_install:
   - go get code.google.com/p/go.tools/cmd/cover
 
 script:
-  - $HOME/gopath/bin/goveralls -repotoken myt2yQHH8H53NXzGNLVJ1BfiAexJUMT5a
+  - $HOME/gopath/bin/goveralls -repotoken Teap05H7GJ0nysDmUHUPJJwNTwkm6B0xy
 
