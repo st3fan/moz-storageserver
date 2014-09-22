@@ -34,7 +34,7 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%d", DEFAULT_API_LISTEN_ADDRESS, DEFAULT_API_LISTEN_PORT)
-	log.Printf("Starting tokenserver server on http://%s", addr)
+	log.Printf("Starting storage server on http://%s", addr)
 	http.Handle("/", router)
 	err = http.ListenAndServe(addr, nil)
 	if err != nil {
