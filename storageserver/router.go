@@ -148,9 +148,22 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-func (c *handlerContext) DeleteAllRecordsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		err := c.db.DeleteAllRecords(credentials.Uid)
+		vars := mux.Vars(r)
+		err := c.db.DeleteCollectionObjects(credentials.Uid, vars["collectionName"])
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+	}
+}
+
+func (c *handlerContext) DeleteUserObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		err := c.db.DeleteUserObjects(credentials.Uid)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -170,7 +183,8 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.GetObjectsHandler).Methods("GET")
-	r.HandleFunc("/1.5/{userId}", context.DeleteAllRecordsHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.DeleteCollectionObjectsHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}", context.DeleteUserObjectsHandler).Methods("DELETE")
 
 	return context, nil
 }

@@ -111,7 +111,12 @@ func (ds *DatabaseSession) GetObjectIds(userId uint64, limit int, newer float64)
 	return nil, nil
 }
 
-func (ds *DatabaseSession) DeleteAllRecords(userId uint64) error {
+func (ds *DatabaseSession) DeleteCollectionObjects(userId uint64, collectionName string) error {
+	_, err := ds.db.Exec("delete from Objects where UserId = $1 and CollectionName = $2", userId, collectionName)
+	return err
+}
+
+func (ds *DatabaseSession) DeleteUserObjects(userId uint64) error {
 	_, err := ds.db.Exec("delete from Objects where UserId = $1", userId)
 	return err
 }
