@@ -25,6 +25,9 @@ type Credentials struct {
 	KeyIdentifier string
 	Key           []byte
 	Algorithm     string
+	// This is application specific. Can this be done in a nicer way with interfaces?
+	Uid      uint64
+	Username string
 }
 
 type Artifacts struct {
@@ -272,5 +275,5 @@ func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (
 
 	// Return the credentials and parsed artifacts
 
-	return Parameters{}, Credentials{}, true
+	return parameters, *credentials, true
 }
