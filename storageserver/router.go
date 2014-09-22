@@ -6,6 +6,7 @@ package storageserver
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
@@ -106,20 +107,31 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		vars := mux.Vars(r)
 		if parseFull(r) {
-			objects, err := c.db.GetObjects(credentials.Uid, parseLimit(r), parseNewer(r))
+			objects, err := c.db.GetObjects(credentials.Uid, vars["collectionName"], parseLimit(r), parseNewer(r))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			encodedObject, err := json.Marshal(objects)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
+
+			w.Header().Set("Content-Type", "application/newlines; charset=UTF-8")
+			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
+			if len(objects) != 0 {
+				w.Header().Set("X-Weave-Timestamp", fmt.Sprintf("%.2f", objects[len(objects)-1].Modified))
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(encodedObject)
+
+			for _, object := range objects {
+				encodedObject, err := json.Marshal(object)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Write(encodedObject)
+				w.Write([]byte("\n"))
+			}
 		} else {
+			// TODO: Get rid of this because I don't think it is actually used on any device?
 			objectIds, err := c.db.GetObjectIds(credentials.Uid, parseLimit(r), parseNewer(r))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)

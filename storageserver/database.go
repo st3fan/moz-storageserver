@@ -13,6 +13,10 @@ func timestampFromInteger(ts uint64) float64 {
 	return float64(ts) / float64(100) // TODO: Don't think this is correct?
 }
 
+func integerFromTimestamp(ts float64) uint64 {
+	return uint64(ts * 100)
+}
+
 type DatabaseSession struct {
 	url string
 	db  *sql.DB
@@ -77,11 +81,33 @@ func (ds *DatabaseSession) GetObject(userId uint64, collectionName string, objec
 	return &object, nil
 }
 
-func (ds *DatabaseSession) GetObjects(userId uint64, limit int, newer float64) ([]Object, error) {
-	return nil, nil
+func (ds *DatabaseSession) GetObjects(userId uint64, collectionName string, limit int, newer float64) ([]Object, error) {
+	if limit == 0 {
+		limit = 5000
+	}
+	rows, err := ds.db.Query("select Id,Modified,Payload from Objects where UserId = $1 and CollectionName = $2 and Modified > $3 order by Modified limit $4", userId, collectionName, integerFromTimestamp(newer), limit)
+	if err != nil {
+		return nil, err
+	}
+	var result []Object
+	for rows.Next() {
+		var modified uint64
+		var object Object
+		if err := rows.Scan(&object.Id, &modified, &object.Payload); err != nil {
+			return nil, err
+		}
+		object.Modified = timestampFromInteger(modified)
+		result = append(result, object)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
+// TODO: Get rid of this because I don't think it is actually used on any device?
 func (ds *DatabaseSession) GetObjectIds(userId uint64, limit int, newer float64) ([]string, error) {
+	panic("GetObjectIds is not implemented. Should it?")
 	return nil, nil
 }
 
