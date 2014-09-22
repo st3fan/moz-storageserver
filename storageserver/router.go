@@ -29,11 +29,6 @@ func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier strin
 	}, nil
 }
 
-func (c *handlerContext) GetUserIdFromRequest(w http.ResponseWriter, r *http.Request) string {
-	params := mux.Vars(r)
-	return params["userId"]
-}
-
 func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
 		log.Printf("InfoCollectionsHandler! (%+v)", credentials)
