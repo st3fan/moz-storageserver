@@ -7,6 +7,7 @@ package storageserver
 import (
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
+	"github.com/st3fan/moz-tokenserver/token"
 	"log"
 	"net/http"
 )
@@ -16,7 +17,16 @@ type handlerContext struct {
 }
 
 func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (*hawk.Credentials, error) {
-	return &hawk.Credentials{Key: []byte{1, 2, 3, 4}, Algorithm: "sha256", KeyIdentifier: "abcdef"}, nil
+	token, err := token.ParseToken([]byte(c.config.SharedSecret), keyIdentifier)
+	if err != nil {
+		return nil, err
+	}
+
+	return &hawk.Credentials{
+		Key:           []byte(token.DerivedSecret),
+		Algorithm:     "sha256",
+		KeyIdentifier: keyIdentifier,
+	}, nil
 }
 
 func (c *handlerContext) GetUserIdFromRequest(w http.ResponseWriter, r *http.Request) string {
