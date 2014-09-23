@@ -10,7 +10,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
-	"log"
 	"net/http"
 	"strconv"
 )
