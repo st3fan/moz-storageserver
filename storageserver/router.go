@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
+	"log"
 	"net/http"
 	"strconv"
 )
@@ -148,6 +149,60 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+type PutObjectsResponse struct {
+	Failed   map[string]string `json:"failed"`
+	Modified float64           `json:"modified"`
+	Success  []string          `json:"success"`
+}
+
+func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		vars := mux.Vars(r)
+
+		decoder := json.NewDecoder(r.Body)
+		var objects []Object
+		err := decoder.Decode(&objects)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		response := &PutObjectsResponse{
+			Failed:   map[string]string{},
+			Modified: 0,
+			Success:  []string{},
+		}
+
+		var goodObjects []Object
+
+		for _, object := range objects {
+			if err := object.Validate(); err != nil {
+				response.Failed[object.Id] = err.Error()
+			} else {
+				goodObjects = append(goodObjects, object)
+			}
+		}
+
+		if response.Modified, err = c.db.SetObjects(credentials.Uid, vars["collectionName"], objects); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		for _, o := range goodObjects {
+			response.Success = append(response.Success, o.Id)
+		}
+
+		encodedResponse, err := json.Marshal(response)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(encodedResponse)
+	}
+}
+
 func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
 		vars := mux.Vars(r)
@@ -183,6 +238,7 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.GetObjectsHandler).Methods("GET")
+	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.PutObjectsHandler).Methods("POST")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.DeleteCollectionObjectsHandler).Methods("DELETE")
 	r.HandleFunc("/1.5/{userId}", context.DeleteUserObjectsHandler).Methods("DELETE")
 

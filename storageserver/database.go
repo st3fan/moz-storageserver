@@ -59,9 +59,15 @@ func (ds *DatabaseSession) GetCollectionTimestamps(uid uint64) (map[string]float
 }
 
 type Object struct {
-	Id       string  `json:"id"`
-	Modified float64 `json:"modified"`
-	Payload  string  `json:"payload"`
+	Id        string  `json:"id"`
+	Modified  float64 `json:"modified"`
+	Payload   string  `json:"payload"`
+	SortIndex int     `json:"sortindex"`
+	TTL       int     `json:"ttl"`
+}
+
+func (o *Object) Validate() error {
+	return nil
 }
 
 func (ds *DatabaseSession) GetObject(userId uint64, collectionName string, objectId string) (*Object, error) {
@@ -119,4 +125,29 @@ func (ds *DatabaseSession) DeleteCollectionObjects(userId uint64, collectionName
 func (ds *DatabaseSession) DeleteUserObjects(userId uint64) error {
 	_, err := ds.db.Exec("delete from Objects where UserId = $1", userId)
 	return err
+}
+
+func (ds *DatabaseSession) SetObjects(userId uint64, collectionName string, objects []Object) (float64, error) {
+	var lastModified float64
+	for _, object := range objects {
+		if object.Modified > lastModified {
+			lastModified = object.Modified
+		}
+
+		var exists bool
+		if err := ds.db.QueryRow("SELECT 1 FROM Objects WHERE UserId=$1 and CollectionName=$2 and Id=$3", userId, collectionName, object.Id).Scan(&exists); err != nil && err != sql.ErrNoRows {
+			return 0, err
+		}
+
+		if exists {
+			if _, err := ds.db.Exec("update Objects set SortIndex=$1,Modified=$2, Payload=$3, TTL=$4 where UserId=$5 and CollectionName=$6 and Id=$7", object.SortIndex, integerFromTimestamp(object.Modified), object.Payload, object.TTL, userId, collectionName, object.Id); err != nil {
+				return 0, err
+			}
+		} else {
+			if _, err := ds.db.Exec("insert into Objects (UserId, CollectionName, Id, SortIndex, Modified, Payload, TTL) values ($1, $2, $3, $4, $5, $6, $7)", userId, collectionName, object.Id, object.SortIndex, integerFromTimestamp(object.Modified), object.Payload, object.TTL); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return lastModified, nil
 }
