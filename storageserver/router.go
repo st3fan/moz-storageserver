@@ -105,6 +105,32 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		vars := mux.Vars(r)
+
+		decoder := json.NewDecoder(r.Body)
+		var object Object
+		err := decoder.Decode(&object)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		modified, err := c.db.PutObject(credentials.Uid, vars["collectionName"], vars["objectId"], object)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		timestamp := fmt.Sprintf("%.2f", modified)
+
+		w.Header().Set("X-Weave-Timestamp", timestamp)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(timestamp))
+	}
+}
+
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
 		vars := mux.Vars(r)
@@ -174,11 +200,19 @@ func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 		var goodObjects []Object
 
-		for _, object := range objects {
-			if err := object.Validate(); err != nil {
-				response.Failed[object.Id] = err.Error()
+		for i, _ := range objects {
+			// TODO: Move this defaults logic into database.go
+			if objects[i].Modified == 0 {
+				objects[i].Modified = timestampNow()
+			}
+			if objects[i].TTL == 0 {
+				objects[i].TTL = 2100000000
+			}
+
+			if err := objects[i].Validate(); err != nil {
+				response.Failed[objects[i].Id] = err.Error()
 			} else {
-				goodObjects = append(goodObjects, object)
+				goodObjects = append(goodObjects, objects[i])
 			}
 		}
 
@@ -236,9 +270,11 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 	context := &handlerContext{config: config, db: db}
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
+	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.PutObjectHandler).Methods("PUT")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.GetObjectsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.PutObjectsHandler).Methods("POST")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.DeleteCollectionObjectsHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}/storage", context.DeleteUserObjectsHandler).Methods("DELETE")
 	r.HandleFunc("/1.5/{userId}", context.DeleteUserObjectsHandler).Methods("DELETE")
 
 	return context, nil

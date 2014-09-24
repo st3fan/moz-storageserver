@@ -7,6 +7,7 @@ package storageserver
 import (
 	"database/sql"
 	_ "github.com/lib/pq"
+	"time"
 )
 
 func timestampFromInteger(ts uint64) float64 {
@@ -15,6 +16,10 @@ func timestampFromInteger(ts uint64) float64 {
 
 func integerFromTimestamp(ts float64) uint64 {
 	return uint64(ts * 100)
+}
+
+func timestampNow() float64 {
+	return float64(time.Now().UnixNano()/10000000) / 100
 }
 
 type DatabaseSession struct {
@@ -85,6 +90,48 @@ func (ds *DatabaseSession) GetObject(userId uint64, collectionName string, objec
 	}
 	object.Modified = timestampFromInteger(modified)
 	return &object, nil
+}
+
+func (ds *DatabaseSession) PutObject(userId uint64, collectionName string, objectId string, object Object) (float64, error) {
+	var exists bool
+	if err := ds.db.QueryRow("SELECT 1 FROM Objects WHERE UserId=$1 and CollectionName=$2 and Id=$3", userId, collectionName, objectId).Scan(&exists); err != nil && err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	existingObject, err := ds.GetObject(userId, collectionName, objectId)
+	if err != nil {
+		return 0, err
+	}
+
+	if exists {
+		if object.Modified == 0.0 {
+			object.Modified = existingObject.Modified
+		}
+		if object.TTL == 0 {
+			object.TTL = existingObject.TTL
+		}
+		if object.Payload == "" {
+			object.Payload = existingObject.Payload
+		}
+		if object.SortIndex == 0 {
+			object.SortIndex = existingObject.SortIndex
+		}
+		if _, err := ds.db.Exec("update Objects set SortIndex=$1,Modified=$2, Payload=$3, TTL=$4 where UserId=$5 and CollectionName=$6 and Id=$7", object.SortIndex, integerFromTimestamp(object.Modified), object.Payload, object.TTL, userId, collectionName, objectId); err != nil {
+			return 0, err
+		}
+	} else {
+		if object.Modified == 0.0 {
+			object.Modified = timestampNow()
+		}
+		if object.TTL == 0 {
+			object.TTL = 2100000000
+		}
+		if _, err := ds.db.Exec("insert into Objects (UserId, CollectionName, Id, SortIndex, Modified, Payload, TTL) values ($1, $2, $3, $4, $5, $6, $7)", userId, collectionName, objectId, object.SortIndex, integerFromTimestamp(object.Modified), object.Payload, object.TTL); err != nil {
+			return 0, err
+		}
+	}
+
+	return object.Modified, nil
 }
 
 func (ds *DatabaseSession) GetObjects(userId uint64, collectionName string, limit int, newer float64) ([]Object, error) {
