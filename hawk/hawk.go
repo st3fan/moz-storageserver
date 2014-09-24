@@ -147,7 +147,11 @@ func getRequestHost(r *http.Request) string {
 }
 
 func getRequestPort(r *http.Request) int {
-	hostPort := strings.Split(r.Host, ":")
+	host := r.Host
+	if len(r.Header["X-Forwarded-Host"]) != 0 {
+		host = r.Header["X-Forwarded-Host"][0]
+	}
+	hostPort := strings.Split(host, ":")
 	if len(hostPort) == 2 {
 		port, _ := strconv.Atoi(hostPort[1])
 		return port
