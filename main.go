@@ -26,7 +26,7 @@ func main() {
 	router := mux.NewRouter()
 	router.HandleFunc("/version", VersionHandler)
 
-	config := storageserver.DefaultConfig() // TODO: Get this from command line options
+	config := storageserver.DefaultConfig()
 
 	_, err := storageserver.SetupRouter(router.PathPrefix(DEFAULT_API_PREFIX).Subrouter(), config)
 	if err != nil {
