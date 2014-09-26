@@ -5,18 +5,18 @@
 package storageserver
 
 const (
-	DEFAULT_DATABASE_URL  = "postgres://storageserver:storageserver@localhost/storageserver"
-	DEFAULT_SHARED_SECRET = "cheesebaconeggs"
+	DEFAULT_DATABASE_ROOT_PATH = "/tmp/storageserver"
+	DEFAULT_SHARED_SECRET      = "cheesebaconeggs"
 )
 
 type Config struct {
-	DatabaseUrl  string
-	SharedSecret string
+	DatabaseRootPath string
+	SharedSecret     string
 }
 
 func DefaultConfig() Config {
 	return Config{
-		DatabaseUrl:  DEFAULT_DATABASE_URL,
-		SharedSecret: DEFAULT_SHARED_SECRET,
+		DatabaseRootPath: DEFAULT_DATABASE_ROOT_PATH,
+		SharedSecret:     DEFAULT_SHARED_SECRET,
 	}
 }
