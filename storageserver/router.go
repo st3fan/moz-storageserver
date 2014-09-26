@@ -243,9 +243,10 @@ func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
 	}, nil
 }
 
-func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, error) {
+func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, int, error) {
 	objects := []Object{}
-	return objects, odb.db.View(func(tx *bolt.Tx) error {
+	nextOffset := 0
+	return objects, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
 		objectsBucket := tx.Bucket([]byte(collectionName))
 		if objectsBucket == nil {
 			return nil
@@ -259,6 +260,10 @@ func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjects
 				if object.Modified > options.Newer {
 					objects = append(objects, object)
 					if len(objects) == options.Limit {
+						stats := objectsBucket.Stats()
+						if len(objects) < stats.KeyN {
+							nextOffset = options.Limit
+						}
 						return IterationCancelledErr
 					}
 				}
@@ -285,9 +290,10 @@ func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjects
 	})
 }
 
-func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, error) {
+func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, int, error) {
+	nextOffset := 0
 	objectIds := []string{}
-	return objectIds, odb.db.View(func(tx *bolt.Tx) error {
+	return objectIds, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
 		objectsBucket := tx.Bucket([]byte(collectionName))
 		if objectsBucket == nil {
 			return nil
@@ -301,6 +307,10 @@ func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjec
 				if object.Modified > options.Newer {
 					objectIds = append(objectIds, string(k))
 					if len(objectIds) == options.Limit {
+						stats := objectsBucket.Stats()
+						if len(objectIds) < stats.KeyN {
+							nextOffset = options.Limit
+						}
 						return IterationCancelledErr
 					}
 				}
@@ -532,7 +542,7 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 		}
 
 		if options.Full {
-			objects, err := odb.GetObjects(vars["collectionName"], options)
+			objects, nextOffset, err := odb.GetObjects(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -546,9 +556,12 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
+			if nextOffset != 0 {
+				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
+			}
 			w.Write(encodedObjects)
 		} else {
-			objectIds, err := odb.GetObjectIds(vars["collectionName"], options)
+			objectIds, nextOffset, err := odb.GetObjectIds(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -562,6 +575,9 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objectIds)))
+			if nextOffset != 0 {
+				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
+			}
 			w.Write(encodedObject)
 		}
 	}
