@@ -75,6 +75,24 @@ func (odb *ObjectDatabase) GetCollectionsInfo() (map[string]CollectionInfo, erro
 	})
 }
 
+func (odb *ObjectDatabase) GetCollectionCounts() (map[string]int, error) {
+	counts := make(map[string]int)
+	return counts, odb.db.View(func(tx *bolt.Tx) error {
+		metaBucket := tx.Bucket([]byte("Collections"))
+		if metaBucket == nil {
+			return nil
+		}
+		return metaBucket.ForEach(func(k, v []byte) error {
+			objectsBucket := tx.Bucket(k)
+			if objectsBucket != nil {
+				stats := objectsBucket.Stats()
+				counts[string(k)] = stats.KeyN
+			}
+			return nil
+		})
+	})
+}
+
 func (odb *ObjectDatabase) GetObject(collectionName, objectId string) (Object, error) {
 	var object Object
 	return object, odb.db.View(func(tx *bolt.Tx) error {
@@ -232,6 +250,35 @@ func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.R
 		}
 
 		encodedObject, err := json.Marshal(result)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(encodedObject)
+		return
+	}
+}
+
+func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		collectionCounts, err := odb.GetCollectionCounts()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		encodedObject, err := json.Marshal(collectionCounts)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -481,6 +528,7 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 
 	context := &handlerContext{config: config, db: db}
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
+	r.HandleFunc("/1.5/{userId}/info/collection_counts", context.InfoCollectionCountsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.PutObjectHandler).Methods("PUT")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.DeleteObjectHandler).Methods("DELETE")
