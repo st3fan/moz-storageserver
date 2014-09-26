@@ -18,6 +18,8 @@ import (
 	"strings"
 )
 
+const MAX_LIMIT = 5000
+
 func putEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -37,6 +39,7 @@ func getEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error 
 //
 
 var ObjectNotFoundErr = errors.New("Object not found")
+var IterationCancelledErr = errors.New("Iteration cancelled")
 
 type ObjectDatabase struct {
 	db *bolt.DB
@@ -187,7 +190,7 @@ func parseLimit(r *http.Request) int {
 		limit, _ := strconv.Atoi(query["limit"][0])
 		return limit
 	}
-	return 0
+	return MAX_LIMIT
 }
 
 func parseOffset(r *http.Request) int {
@@ -243,7 +246,42 @@ func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
 func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, error) {
 	objects := []Object{}
 	return objects, odb.db.View(func(tx *bolt.Tx) error {
-		return nil
+		objectsBucket := tx.Bucket([]byte(collectionName))
+		if objectsBucket == nil {
+			return nil
+		}
+		if len(options.Ids) == 0 {
+			err := objectsBucket.ForEach(func(k, v []byte) error {
+				var object Object
+				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
+					return err
+				}
+				if object.Modified > options.Newer {
+					objects = append(objects, object)
+					if len(objects) == options.Limit {
+						return IterationCancelledErr
+					}
+				}
+				return nil
+			})
+			if err == IterationCancelledErr {
+				return nil
+			}
+			return err
+		} else {
+			for _, objectId := range options.Ids {
+				if data := objectsBucket.Get([]byte(objectId)); data != nil {
+					var object Object
+					if err := json.Unmarshal(data, &object); err != nil {
+						return err
+					}
+					if object.Modified > options.Newer {
+						objects = append(objects, object)
+					}
+				}
+			}
+			return nil
+		}
 	})
 }
 
@@ -255,20 +293,33 @@ func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjec
 			return nil
 		}
 		if len(options.Ids) == 0 {
-			return objectsBucket.ForEach(func(k, v []byte) error {
+			err := objectsBucket.ForEach(func(k, v []byte) error {
 				var object Object
 				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
 					return err
 				}
 				if object.Modified > options.Newer {
 					objectIds = append(objectIds, string(k))
+					if len(objectIds) == options.Limit {
+						return IterationCancelledErr
+					}
 				}
 				return nil
 			})
+			if err == IterationCancelledErr {
+				return nil
+			}
+			return err
 		} else {
 			for _, objectId := range options.Ids {
-				if objectsBucket.Get([]byte(objectId)) != nil {
-					objectIds = append(objectIds, objectId)
+				if data := objectsBucket.Get([]byte(objectId)); data != nil {
+					var object Object
+					if err := json.Unmarshal(data, &object); err != nil {
+						return err
+					}
+					if object.Modified > options.Newer {
+						objectIds = append(objectIds, objectId)
+					}
 				}
 			}
 			return nil
@@ -481,27 +532,21 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 		}
 
 		if options.Full {
-			// objects, err := c.db.GetObjects(credentials.Uid, vars["collectionName"], parseLimit(r), parseNewer(r))
-			// if err != nil {
-			// 	http.Error(w, err.Error(), http.StatusInternalServerError)
-			// 	return
-			// }
+			objects, err := odb.GetObjects(vars["collectionName"], options)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 
-			// w.Header().Set("Content-Type", "application/newlines; charset=UTF-8")
-			// w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
-			// if len(objects) != 0 {
-			// 	w.Header().Set("X-Weave-Timestamp", fmt.Sprintf("%.2f", objects[len(objects)-1].Modified))
-			// }
+			encodedObjects, err := json.Marshal(objects)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
 
-			// for _, object := range objects {
-			// 	encodedObject, err := json.Marshal(object)
-			// 	if err != nil {
-			// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-			// 		return
-			// 	}
-			// 	w.Write(encodedObject)
-			// 	w.Write([]byte("\n"))
-			// }
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
+			w.Write(encodedObjects)
 		} else {
 			objectIds, err := odb.GetObjectIds(vars["collectionName"], options)
 			if err != nil {
