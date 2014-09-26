@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 func putEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
@@ -180,12 +181,19 @@ func (odb *ObjectDatabase) DeleteObject(collectionName, objectId string) error {
 	})
 }
 
-// Utility functions to deal with query parameter parsing
-
 func parseLimit(r *http.Request) int {
 	query := r.URL.Query()
 	if len(query["limit"]) != 0 {
 		limit, _ := strconv.Atoi(query["limit"][0])
+		return limit
+	}
+	return 0
+}
+
+func parseOffset(r *http.Request) int {
+	query := r.URL.Query()
+	if len(query["offset"]) != 0 {
+		limit, _ := strconv.Atoi(query["offset"][0])
 		return limit
 	}
 	return 0
@@ -203,6 +211,69 @@ func parseNewer(r *http.Request) float64 {
 		return newer
 	}
 	return 0
+}
+
+func parseIds(r *http.Request) []string {
+	query := r.URL.Query()
+	if len(query["ids"]) != 0 {
+		return strings.Split(query["ids"][0], ",")
+	}
+	return nil
+}
+
+type GetObjectsOptions struct {
+	Full   bool
+	Limit  int
+	Offset int
+	Newer  float64
+	Ids    []string
+}
+
+func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
+	// TODO: This should also do parameter validation
+	return &GetObjectsOptions{
+		Full:   parseFull(r),
+		Limit:  parseLimit(r),
+		Offset: parseOffset(r),
+		Newer:  parseNewer(r),
+		Ids:    parseIds(r),
+	}, nil
+}
+
+func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, error) {
+	objects := []Object{}
+	return objects, odb.db.View(func(tx *bolt.Tx) error {
+		return nil
+	})
+}
+
+func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, error) {
+	objectIds := []string{}
+	return objectIds, odb.db.View(func(tx *bolt.Tx) error {
+		objectsBucket := tx.Bucket([]byte(collectionName))
+		if objectsBucket == nil {
+			return nil
+		}
+		if len(options.Ids) == 0 {
+			return objectsBucket.ForEach(func(k, v []byte) error {
+				var object Object
+				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
+					return err
+				}
+				if object.Modified > options.Newer {
+					objectIds = append(objectIds, string(k))
+				}
+				return nil
+			})
+		} else {
+			for _, objectId := range options.Ids {
+				if objectsBucket.Get([]byte(objectId)) != nil {
+					objectIds = append(objectIds, objectId)
+				}
+			}
+			return nil
+		}
+	})
 }
 
 //
@@ -392,42 +463,60 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
 		vars := mux.Vars(r)
-		if parseFull(r) {
-			objects, err := c.db.GetObjects(credentials.Uid, vars["collectionName"], parseLimit(r), parseNewer(r))
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
 
-			w.Header().Set("Content-Type", "application/newlines; charset=UTF-8")
-			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
-			if len(objects) != 0 {
-				w.Header().Set("X-Weave-Timestamp", fmt.Sprintf("%.2f", objects[len(objects)-1].Modified))
-			}
+		options, err := ParseGetObjectsOptions(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-			for _, object := range objects {
-				encodedObject, err := json.Marshal(object)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.Write(encodedObject)
-				w.Write([]byte("\n"))
-			}
+		if options.Full {
+			// objects, err := c.db.GetObjects(credentials.Uid, vars["collectionName"], parseLimit(r), parseNewer(r))
+			// if err != nil {
+			// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+			// 	return
+			// }
+
+			// w.Header().Set("Content-Type", "application/newlines; charset=UTF-8")
+			// w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
+			// if len(objects) != 0 {
+			// 	w.Header().Set("X-Weave-Timestamp", fmt.Sprintf("%.2f", objects[len(objects)-1].Modified))
+			// }
+
+			// for _, object := range objects {
+			// 	encodedObject, err := json.Marshal(object)
+			// 	if err != nil {
+			// 		http.Error(w, err.Error(), http.StatusInternalServerError)
+			// 		return
+			// 	}
+			// 	w.Write(encodedObject)
+			// 	w.Write([]byte("\n"))
+			// }
 		} else {
-			// TODO: Get rid of this because I don't think it is actually used on any device?
-			objectIds, err := c.db.GetObjectIds(credentials.Uid, parseLimit(r), parseNewer(r))
+			objectIds, err := odb.GetObjectIds(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
 			encodedObject, err := json.Marshal(objectIds)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objectIds)))
 			w.Write(encodedObject)
 		}
 	}
