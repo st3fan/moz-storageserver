@@ -528,6 +528,11 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		if accepts := r.Header.Get("Accepts"); accepts != "application/json" {
+			http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
+			return
+		}
+
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
