@@ -252,21 +252,23 @@ func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjects
 			return nil
 		}
 		if len(options.Ids) == 0 {
+			offset := 0
 			err := objectsBucket.ForEach(func(k, v []byte) error {
 				var object Object
 				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
 					return err
 				}
-				if object.Modified > options.Newer {
+				if offset >= options.Offset && object.Modified > options.Newer {
 					objects = append(objects, object)
 					if len(objects) == options.Limit {
 						stats := objectsBucket.Stats()
 						if len(objects) < stats.KeyN {
-							nextOffset = options.Limit
+							nextOffset = options.Offset + options.Limit
 						}
 						return IterationCancelledErr
 					}
 				}
+				offset++
 				return nil
 			})
 			if err == IterationCancelledErr {
@@ -299,21 +301,23 @@ func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjec
 			return nil
 		}
 		if len(options.Ids) == 0 {
+			offset := 0
 			err := objectsBucket.ForEach(func(k, v []byte) error {
 				var object Object
 				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
 					return err
 				}
-				if object.Modified > options.Newer {
+				if offset >= options.Offset && object.Modified > options.Newer {
 					objectIds = append(objectIds, string(k))
 					if len(objectIds) == options.Limit {
 						stats := objectsBucket.Stats()
 						if len(objectIds) < stats.KeyN {
-							nextOffset = options.Limit
+							nextOffset = options.Offset + options.Limit
 						}
 						return IterationCancelledErr
 					}
 				}
+				offset++
 				return nil
 			})
 			if err == IterationCancelledErr {
