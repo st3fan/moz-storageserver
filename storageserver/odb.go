@@ -330,6 +330,61 @@ func (odb *ObjectDatabase) DeleteObjects(collectionName string, objectIds []stri
 	})
 }
 
+func (odb *ObjectDatabase) PutObjects(collectionName string, objects []Object) (float64, error) {
+	var lastModified float64 = timestampNow()
+	return lastModified, odb.db.Update(func(tx *bolt.Tx) error {
+		objectsBucket, err := tx.CreateBucketIfNotExists([]byte(collectionName))
+		if err != nil {
+			return err
+		}
+
+		for _, object := range objects {
+			// If the object already exists then this is an update and we need to merge
+			var existingObject Object
+			encodedExistingObject := objectsBucket.Get([]byte(object.Id))
+			if encodedExistingObject == nil {
+				if object.TTL == 0 {
+					object.TTL = 2100000000
+				}
+			} else {
+				if err := json.Unmarshal(encodedExistingObject, &existingObject); err != nil {
+					return err
+				}
+				if object.TTL == 0 {
+					object.TTL = existingObject.TTL
+				}
+				if object.Payload == "" {
+					object.Payload = existingObject.Payload
+				}
+				if object.SortIndex == 0 {
+					object.SortIndex = existingObject.SortIndex
+				}
+			}
+
+			object.Modified = lastModified // Always set the object's modified time
+
+			if err := putEncodedObject(objectsBucket, object.Id, object); err != nil {
+				return err
+			}
+		}
+
+		// Update collections info
+
+		metaBucket, err := tx.CreateBucketIfNotExists([]byte("Collections"))
+		if err != nil {
+			return err
+		}
+
+		if err := putEncodedObject(metaBucket, collectionName, CollectionInfo{LastModified: lastModified}); err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
+//
+
 // Delete an entire collection. Side effects: updates the global last
 // modified for the storage. Returns the global last modified. Returns
 // a CollectionNotFoundErr if the collection does not exist.

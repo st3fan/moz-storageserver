@@ -319,59 +319,72 @@ type PostObjectsResponse struct {
 }
 
 func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	// if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-	// 	vars := mux.Vars(r)
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		// We expect application/json or text/plain (from broken clients)
+		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" && contentType != "text/plain" {
+			http.Error(w, "Not Acceptable", http.StatusUnsupportedMediaType)
+			return
+		}
 
-	// 	decoder := json.NewDecoder(r.Body)
-	// 	var objects []Object
-	// 	err := decoder.Decode(&objects)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 		return
-	// 	}
+		// Parse the incoming objects
+		decoder := json.NewDecoder(r.Body)
+		var objects []Object
+		err := decoder.Decode(&objects)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	// 	response := &PostObjectsResponse{
-	// 		Failed:   map[string]string{},
-	// 		Modified: 0,
-	// 		Success:  []string{},
-	// 	}
+		for _, object := range objects {
+			log.Printf("Object: %v", object)
+		}
 
-	// 	var goodObjects []Object
+		response := &PostObjectsResponse{
+			Failed:   map[string]string{},
+			Modified: 0,
+			Success:  []string{},
+		}
 
-	// 	for i, _ := range objects {
-	// 		// TODO: Move this defaults logic into database.go
-	// 		if objects[i].Modified == 0 {
-	// 			objects[i].Modified = timestampNow()
-	// 		}
-	// 		if objects[i].TTL == 0 {
-	// 			objects[i].TTL = 2100000000
-	// 		}
+		// Collect the records that are good
+		var goodObjects []Object
+		for i, _ := range objects {
+			if err := objects[i].Validate(); err != nil {
+				response.Failed[objects[i].Id] = err.Error()
+			} else {
+				goodObjects = append(goodObjects, objects[i])
+			}
+		}
 
-	// 		if err := objects[i].Validate(); err != nil {
-	// 			response.Failed[objects[i].Id] = err.Error()
-	// 		} else {
-	// 			goodObjects = append(goodObjects, objects[i])
-	// 		}
-	// 	}
+		// Insert or update the records
 
-	// 	if response.Modified, err = c.db.SetObjects(credentials.Uid, vars["collectionName"], objects); err != nil {
-	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 		return
-	// 	}
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
 
-	// 	for _, o := range goodObjects {
-	// 		response.Success = append(response.Success, o.Id)
-	// 	}
+		if response.Modified, err = odb.PutObjects(mux.Vars(r)["collectionName"], objects); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 
-	// 	encodedResponse, err := json.Marshal(response)
-	// 	if err != nil {
-	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	// 		return
-	// 	}
+		for _, o := range goodObjects {
+			response.Success = append(response.Success, o.Id)
+		}
 
-	// 	w.Header().Set("Content-Type", "application/json")
-	// 	w.Write(encodedResponse)
-	// }
+		encodedResponse, err := json.Marshal(response)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(encodedResponse)
+
+	}
 }
 
 type DeleteCollectionObjectsResponse struct {
