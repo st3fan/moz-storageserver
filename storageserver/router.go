@@ -6,7 +6,6 @@ package storageserver
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/boltdb/bolt"
 	"github.com/gorilla/mux"
@@ -37,152 +36,6 @@ func getEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error 
 }
 
 //
-
-var ObjectNotFoundErr = errors.New("Object not found")
-var IterationCancelledErr = errors.New("Iteration cancelled")
-
-type ObjectDatabase struct {
-	db *bolt.DB
-}
-
-type CollectionInfo struct {
-	LastModified float64
-}
-
-func OpenObjectDatabase(path string) (*ObjectDatabase, error) {
-	db, err := bolt.Open(path, 0600, nil)
-	if err != nil {
-		return nil, err
-	}
-	return &ObjectDatabase{db: db}, nil
-}
-
-func (odb *ObjectDatabase) Close() error {
-	return odb.db.Close()
-}
-
-func (odb *ObjectDatabase) GetCollectionsInfo() (map[string]CollectionInfo, error) {
-	infos := make(map[string]CollectionInfo)
-	return infos, odb.db.View(func(tx *bolt.Tx) error {
-		metaBucket := tx.Bucket([]byte("Collections"))
-		if metaBucket == nil {
-			return nil
-		}
-		return metaBucket.ForEach(func(k, v []byte) error {
-			var collectionInfo CollectionInfo
-			if err := json.Unmarshal(v, &collectionInfo); err != nil {
-				return err
-			}
-			infos[string(k)] = collectionInfo
-			return nil
-		})
-	})
-}
-
-func (odb *ObjectDatabase) GetCollectionCounts() (map[string]int, error) {
-	counts := make(map[string]int)
-	return counts, odb.db.View(func(tx *bolt.Tx) error {
-		metaBucket := tx.Bucket([]byte("Collections"))
-		if metaBucket == nil {
-			return nil
-		}
-		return metaBucket.ForEach(func(k, v []byte) error {
-			objectsBucket := tx.Bucket(k)
-			if objectsBucket != nil {
-				stats := objectsBucket.Stats()
-				counts[string(k)] = stats.KeyN
-			}
-			return nil
-		})
-	})
-}
-
-func (odb *ObjectDatabase) GetObject(collectionName, objectId string) (Object, error) {
-	var object Object
-	return object, odb.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte(collectionName))
-		if bucket == nil {
-			log.Printf("Cannot find object %s/%s", collectionName, objectId)
-			return ObjectNotFoundErr
-		}
-		encodedObject := bucket.Get([]byte(objectId))
-		if encodedObject == nil {
-			log.Printf("")
-			return ObjectNotFoundErr
-		}
-		return json.Unmarshal(encodedObject, &object)
-	})
-}
-
-func (odb *ObjectDatabase) PutObject(collectionName string, object Object) (Object, error) {
-	return object, odb.db.Update(func(tx *bolt.Tx) error {
-		objectsBucket, err := tx.CreateBucketIfNotExists([]byte(collectionName))
-		if err != nil {
-			return err
-		}
-
-		// If the object already exists then this is an update and we need to merge
-		var existingObject Object
-		encodedExistingObject := objectsBucket.Get([]byte(object.Id))
-		if encodedExistingObject == nil {
-			if object.Modified == 0 {
-				object.Modified = timestampNow()
-			}
-			if object.TTL == 0 {
-				object.TTL = 2100000000
-			}
-		} else {
-			if err := json.Unmarshal(encodedExistingObject, &existingObject); err != nil {
-				return err
-			}
-			if object.Modified == 0.0 {
-				object.Modified = existingObject.Modified
-			}
-			if object.TTL == 0 {
-				object.TTL = existingObject.TTL
-			}
-			if object.Payload == "" {
-				object.Payload = existingObject.Payload
-			}
-			if object.SortIndex == 0 {
-				object.SortIndex = existingObject.SortIndex
-			}
-		}
-
-		if err := putEncodedObject(objectsBucket, object.Id, object); err != nil {
-			return err
-		}
-
-		// Update collections info
-
-		metaBucket, err := tx.CreateBucketIfNotExists([]byte("Collections"))
-		if err != nil {
-			return err
-		}
-
-		if err := putEncodedObject(metaBucket, collectionName, CollectionInfo{LastModified: object.Modified}); err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-func (odb *ObjectDatabase) DeleteObject(collectionName, objectId string) error {
-	return odb.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte(collectionName))
-		if err != nil {
-			return err
-		}
-
-		encodedObject := bucket.Get([]byte(objectId))
-		if encodedObject == nil {
-			return ObjectNotFoundErr
-		}
-
-		return bucket.Delete([]byte(objectId))
-	})
-}
 
 func parseLimit(r *http.Request) int {
 	query := r.URL.Query()
@@ -654,16 +507,61 @@ func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+type DeleteCollectionObjectsResponse struct {
+	Modified float64 `json:"modified"`
+}
+
 func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
 		vars := mux.Vars(r)
-		err := c.db.DeleteCollectionObjects(credentials.Uid, vars["collectionName"])
+
+		objectIds := parseIds(r)
+
+		var lastModified float64
+
+		if len(objectIds) != 0 {
+			lastModified, err = odb.DeleteObjects(vars["collectionName"], objectIds)
+			if err != nil {
+				if err == CollectionNotFoundErr {
+					http.Error(w, "Collection Not Found", http.StatusNotFound)
+				} else {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}
+		} else {
+			lastModified, err = odb.DeleteCollection(vars["collectionName"])
+			if err != nil {
+				if err == CollectionNotFoundErr {
+					http.Error(w, "Collection Not Found", http.StatusNotFound)
+				} else {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}
+		}
+
+		// Return the last modified of the collection
+
+		response := DeleteCollectionObjectsResponse{
+			Modified: lastModified,
+		}
+
+		encodedResponse, err := json.Marshal(response)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		w.Write(encodedResponse)
 	}
 }
 
