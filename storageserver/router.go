@@ -7,7 +7,6 @@ package storageserver
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/boltdb/bolt"
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
@@ -18,22 +17,6 @@ import (
 )
 
 const MAX_LIMIT = 5000
-
-func putEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return err
-	}
-	return bucket.Put([]byte(key), data)
-}
-
-func getEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
-	data := bucket.Get([]byte(key))
-	if data == nil {
-		return ObjectNotFoundErr
-	}
-	return json.Unmarshal(data, &value)
-}
 
 //
 
@@ -75,123 +58,6 @@ func parseIds(r *http.Request) []string {
 		return strings.Split(query["ids"][0], ",")
 	}
 	return nil
-}
-
-type GetObjectsOptions struct {
-	Full   bool
-	Limit  int
-	Offset int
-	Newer  float64
-	Ids    []string
-}
-
-func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
-	// TODO: This should also do parameter validation
-	return &GetObjectsOptions{
-		Full:   parseFull(r),
-		Limit:  parseLimit(r),
-		Offset: parseOffset(r),
-		Newer:  parseNewer(r),
-		Ids:    parseIds(r),
-	}, nil
-}
-
-func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, int, error) {
-	objects := []Object{}
-	nextOffset := 0
-	return objects, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
-		objectsBucket := tx.Bucket([]byte(collectionName))
-		if objectsBucket == nil {
-			return nil
-		}
-		if len(options.Ids) == 0 {
-			offset := 0
-			err := objectsBucket.ForEach(func(k, v []byte) error {
-				var object Object
-				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
-					return err
-				}
-				if offset >= options.Offset && object.Modified > options.Newer {
-					objects = append(objects, object)
-					if len(objects) == options.Limit {
-						stats := objectsBucket.Stats()
-						if len(objects) < stats.KeyN {
-							nextOffset = options.Offset + options.Limit
-						}
-						return IterationCancelledErr
-					}
-				}
-				offset++
-				return nil
-			})
-			if err == IterationCancelledErr {
-				return nil
-			}
-			return err
-		} else {
-			for _, objectId := range options.Ids {
-				if data := objectsBucket.Get([]byte(objectId)); data != nil {
-					var object Object
-					if err := json.Unmarshal(data, &object); err != nil {
-						return err
-					}
-					if object.Modified > options.Newer {
-						objects = append(objects, object)
-					}
-				}
-			}
-			return nil
-		}
-	})
-}
-
-func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, int, error) {
-	nextOffset := 0
-	objectIds := []string{}
-	return objectIds, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
-		objectsBucket := tx.Bucket([]byte(collectionName))
-		if objectsBucket == nil {
-			return nil
-		}
-		if len(options.Ids) == 0 {
-			offset := 0
-			err := objectsBucket.ForEach(func(k, v []byte) error {
-				var object Object
-				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
-					return err
-				}
-				if offset >= options.Offset && object.Modified > options.Newer {
-					objectIds = append(objectIds, string(k))
-					if len(objectIds) == options.Limit {
-						stats := objectsBucket.Stats()
-						if len(objectIds) < stats.KeyN {
-							nextOffset = options.Offset + options.Limit
-						}
-						return IterationCancelledErr
-					}
-				}
-				offset++
-				return nil
-			})
-			if err == IterationCancelledErr {
-				return nil
-			}
-			return err
-		} else {
-			for _, objectId := range options.Ids {
-				if data := objectsBucket.Get([]byte(objectId)); data != nil {
-					var object Object
-					if err := json.Unmarshal(data, &object); err != nil {
-						return err
-					}
-					if object.Modified > options.Newer {
-						objectIds = append(objectIds, objectId)
-					}
-				}
-			}
-			return nil
-		}
-	})
 }
 
 //
@@ -453,59 +319,59 @@ type PostObjectsResponse struct {
 }
 
 func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		vars := mux.Vars(r)
+	// if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	// 	vars := mux.Vars(r)
 
-		decoder := json.NewDecoder(r.Body)
-		var objects []Object
-		err := decoder.Decode(&objects)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// 	decoder := json.NewDecoder(r.Body)
+	// 	var objects []Object
+	// 	err := decoder.Decode(&objects)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 		return
+	// 	}
 
-		response := &PostObjectsResponse{
-			Failed:   map[string]string{},
-			Modified: 0,
-			Success:  []string{},
-		}
+	// 	response := &PostObjectsResponse{
+	// 		Failed:   map[string]string{},
+	// 		Modified: 0,
+	// 		Success:  []string{},
+	// 	}
 
-		var goodObjects []Object
+	// 	var goodObjects []Object
 
-		for i, _ := range objects {
-			// TODO: Move this defaults logic into database.go
-			if objects[i].Modified == 0 {
-				objects[i].Modified = timestampNow()
-			}
-			if objects[i].TTL == 0 {
-				objects[i].TTL = 2100000000
-			}
+	// 	for i, _ := range objects {
+	// 		// TODO: Move this defaults logic into database.go
+	// 		if objects[i].Modified == 0 {
+	// 			objects[i].Modified = timestampNow()
+	// 		}
+	// 		if objects[i].TTL == 0 {
+	// 			objects[i].TTL = 2100000000
+	// 		}
 
-			if err := objects[i].Validate(); err != nil {
-				response.Failed[objects[i].Id] = err.Error()
-			} else {
-				goodObjects = append(goodObjects, objects[i])
-			}
-		}
+	// 		if err := objects[i].Validate(); err != nil {
+	// 			response.Failed[objects[i].Id] = err.Error()
+	// 		} else {
+	// 			goodObjects = append(goodObjects, objects[i])
+	// 		}
+	// 	}
 
-		if response.Modified, err = c.db.SetObjects(credentials.Uid, vars["collectionName"], objects); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// 	if response.Modified, err = c.db.SetObjects(credentials.Uid, vars["collectionName"], objects); err != nil {
+	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 		return
+	// 	}
 
-		for _, o := range goodObjects {
-			response.Success = append(response.Success, o.Id)
-		}
+	// 	for _, o := range goodObjects {
+	// 		response.Success = append(response.Success, o.Id)
+	// 	}
 
-		encodedResponse, err := json.Marshal(response)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+	// 	encodedResponse, err := json.Marshal(response)
+	// 	if err != nil {
+	// 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 		return
+	// 	}
 
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(encodedResponse)
-	}
+	// 	w.Header().Set("Content-Type", "application/json")
+	// 	w.Write(encodedResponse)
+	// }
 }
 
 type DeleteCollectionObjectsResponse struct {

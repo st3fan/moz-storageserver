@@ -8,19 +8,37 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/boltdb/bolt"
-	"log"
+	"net/http"
 )
+
+// Errors
 
 var CollectionNotFoundErr = errors.New("Collection not found")
 var ObjectNotFoundErr = errors.New("Object not found")
 var IterationCancelledErr = errors.New("Iteration cancelled")
 
-type ObjectDatabase struct {
-	db *bolt.DB
+// Utilities
+
+func putEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return bucket.Put([]byte(key), data)
 }
 
-type CollectionInfo struct {
-	LastModified float64
+func getEncodedObject(bucket *bolt.Bucket, key string, value interface{}) error {
+	data := bucket.Get([]byte(key))
+	if data == nil {
+		return ObjectNotFoundErr
+	}
+	return json.Unmarshal(data, &value)
+}
+
+// Object Database
+
+type ObjectDatabase struct {
+	db *bolt.DB
 }
 
 func OpenObjectDatabase(path string) (*ObjectDatabase, error) {
@@ -33,6 +51,12 @@ func OpenObjectDatabase(path string) (*ObjectDatabase, error) {
 
 func (odb *ObjectDatabase) Close() error {
 	return odb.db.Close()
+}
+
+//
+
+type CollectionInfo struct {
+	LastModified float64
 }
 
 func (odb *ObjectDatabase) GetCollectionsInfo() (map[string]CollectionInfo, error) {
@@ -53,6 +77,8 @@ func (odb *ObjectDatabase) GetCollectionsInfo() (map[string]CollectionInfo, erro
 	})
 }
 
+//
+
 func (odb *ObjectDatabase) GetCollectionCounts() (map[string]int, error) {
 	counts := make(map[string]int)
 	return counts, odb.db.View(func(tx *bolt.Tx) error {
@@ -71,22 +97,141 @@ func (odb *ObjectDatabase) GetCollectionCounts() (map[string]int, error) {
 	})
 }
 
+type GetObjectsOptions struct {
+	Full   bool
+	Limit  int
+	Offset int
+	Newer  float64
+	Ids    []string
+}
+
+func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
+	// TODO: This should also do parameter validation
+	return &GetObjectsOptions{
+		Full:   parseFull(r),
+		Limit:  parseLimit(r),
+		Offset: parseOffset(r),
+		Newer:  parseNewer(r),
+		Ids:    parseIds(r),
+	}, nil
+}
+
+func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, int, error) {
+	objects := []Object{}
+	nextOffset := 0
+	return objects, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
+		objectsBucket := tx.Bucket([]byte(collectionName))
+		if objectsBucket == nil {
+			return nil
+		}
+		if len(options.Ids) == 0 {
+			offset := 0
+			err := objectsBucket.ForEach(func(k, v []byte) error {
+				var object Object
+				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
+					return err
+				}
+				if offset >= options.Offset && object.Modified > options.Newer {
+					objects = append(objects, object)
+					if len(objects) == options.Limit {
+						stats := objectsBucket.Stats()
+						if len(objects) < stats.KeyN {
+							nextOffset = options.Offset + options.Limit
+						}
+						return IterationCancelledErr
+					}
+				}
+				offset++
+				return nil
+			})
+			if err == IterationCancelledErr {
+				return nil
+			}
+			return err
+		} else {
+			for _, objectId := range options.Ids {
+				if data := objectsBucket.Get([]byte(objectId)); data != nil {
+					var object Object
+					if err := json.Unmarshal(data, &object); err != nil {
+						return err
+					}
+					if object.Modified > options.Newer {
+						objects = append(objects, object)
+					}
+				}
+			}
+			return nil
+		}
+	})
+}
+
+func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, int, error) {
+	nextOffset := 0
+	objectIds := []string{}
+	return objectIds, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
+		objectsBucket := tx.Bucket([]byte(collectionName))
+		if objectsBucket == nil {
+			return nil
+		}
+		if len(options.Ids) == 0 {
+			offset := 0
+			err := objectsBucket.ForEach(func(k, v []byte) error {
+				var object Object
+				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
+					return err
+				}
+				if offset >= options.Offset && object.Modified > options.Newer {
+					objectIds = append(objectIds, string(k))
+					if len(objectIds) == options.Limit {
+						stats := objectsBucket.Stats()
+						if len(objectIds) < stats.KeyN {
+							nextOffset = options.Offset + options.Limit
+						}
+						return IterationCancelledErr
+					}
+				}
+				offset++
+				return nil
+			})
+			if err == IterationCancelledErr {
+				return nil
+			}
+			return err
+		} else {
+			for _, objectId := range options.Ids {
+				if data := objectsBucket.Get([]byte(objectId)); data != nil {
+					var object Object
+					if err := json.Unmarshal(data, &object); err != nil {
+						return err
+					}
+					if object.Modified > options.Newer {
+						objectIds = append(objectIds, objectId)
+					}
+				}
+			}
+			return nil
+		}
+	})
+}
+
+//
+
 func (odb *ObjectDatabase) GetObject(collectionName, objectId string) (Object, error) {
 	var object Object
 	return object, odb.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(collectionName))
 		if bucket == nil {
-			log.Printf("Cannot find object %s/%s", collectionName, objectId)
 			return ObjectNotFoundErr
 		}
 		encodedObject := bucket.Get([]byte(objectId))
 		if encodedObject == nil {
-			log.Printf("")
 			return ObjectNotFoundErr
 		}
 		return json.Unmarshal(encodedObject, &object)
 	})
 }
+
+//
 
 func (odb *ObjectDatabase) PutObject(collectionName string, object Object) (Object, error) {
 	return object, odb.db.Update(func(tx *bolt.Tx) error {
@@ -142,6 +287,8 @@ func (odb *ObjectDatabase) PutObject(collectionName string, object Object) (Obje
 	})
 }
 
+//
+
 func (odb *ObjectDatabase) DeleteObject(collectionName, objectId string) error {
 	return odb.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte(collectionName))
@@ -157,6 +304,8 @@ func (odb *ObjectDatabase) DeleteObject(collectionName, objectId string) error {
 		return bucket.Delete([]byte(objectId))
 	})
 }
+
+//
 
 func (odb *ObjectDatabase) DeleteObjects(collectionName string, objectIds []string) (float64, error) {
 	var lastModified float64 = timestampNow()
@@ -225,7 +374,6 @@ func (odb *ObjectDatabase) DeleteStorage() error {
 		var err error
 		if metaBucket := tx.Bucket([]byte("Collections")); metaBucket != nil {
 			err = metaBucket.ForEach(func(k, v []byte) error {
-				log.Printf("Deleting %s", string(k))
 				return tx.DeleteBucket(k)
 			})
 			if err == nil {
