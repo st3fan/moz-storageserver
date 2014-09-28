@@ -10,7 +10,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/st3fan/moz-storageserver/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -87,7 +86,6 @@ func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.R
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -121,7 +119,6 @@ func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *h
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -150,7 +147,6 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -160,7 +156,6 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 
 		object, err := odb.GetObject(vars["collectionName"], vars["objectId"])
 		if err != nil && err != ObjectNotFoundErr {
-			log.Printf("Error while GetObject(%s, %s): %s", vars["collectionName"], vars["objectId"], err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		} else if err == ObjectNotFoundErr {
@@ -170,7 +165,6 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 
 		encodedObject, err := json.Marshal(object)
 		if err != nil {
-			log.Printf("Error while json.Marshal(): %s", err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -185,7 +179,6 @@ func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -204,7 +197,6 @@ func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request
 
 		savedObject, err := odb.PutObject(vars["collectionName"], object)
 		if err != nil {
-			log.Printf("Error while PutObject(%s, %#v): %s", vars["collectionName"], object, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -223,7 +215,6 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -233,7 +224,6 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 
 		err = odb.DeleteObject(vars["collectionName"], vars["objectId"])
 		if err != nil && err != ObjectNotFoundErr {
-			log.Printf("Error while DeleteObject(%s, %s): %s", vars["collectionName"], vars["objectId"], err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		} else if err == ObjectNotFoundErr {
@@ -256,7 +246,6 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -335,10 +324,6 @@ func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
-		for _, object := range objects {
-			log.Printf("Object: %v", object)
-		}
-
 		response := &PostObjectsResponse{
 			Failed:   map[string]string{},
 			Modified: 0,
@@ -360,7 +345,6 @@ func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Reque
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -396,7 +380,6 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -454,7 +437,6 @@ func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Req
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
-			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
