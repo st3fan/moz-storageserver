@@ -570,11 +570,20 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 	}
 }
 
-func (c *handlerContext) DeleteUserObjectsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		err := c.db.DeleteUserObjects(credentials.Uid)
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
 		if err != nil {
+			log.Printf("Error while OpenObjectDatabase(%s): %s", path, err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		if err := odb.DeleteStorage(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -597,8 +606,8 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.GetObjectsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.PostObjectsHandler).Methods("POST")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.DeleteCollectionObjectsHandler).Methods("DELETE")
-	r.HandleFunc("/1.5/{userId}/storage", context.DeleteUserObjectsHandler).Methods("DELETE")
-	r.HandleFunc("/1.5/{userId}", context.DeleteUserObjectsHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}/storage", context.DeleteStorageHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}", context.DeleteStorageHandler).Methods("DELETE")
 
 	return context, nil
 }

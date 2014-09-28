@@ -217,3 +217,21 @@ func (odb *ObjectDatabase) DeleteCollection(collectionName string) (float64, err
 		})
 	})
 }
+
+// Delete all storage. We keep the database file but delete all collections in it.
+
+func (odb *ObjectDatabase) DeleteStorage() error {
+	return odb.db.Update(func(tx *bolt.Tx) error {
+		var err error
+		if metaBucket := tx.Bucket([]byte("Collections")); metaBucket != nil {
+			err = metaBucket.ForEach(func(k, v []byte) error {
+				log.Printf("Deleting %s", string(k))
+				return tx.DeleteBucket(k)
+			})
+			if err == nil {
+				err = tx.DeleteBucket([]byte("Collections"))
+			}
+		}
+		return err
+	})
+}
