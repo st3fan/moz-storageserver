@@ -561,6 +561,7 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Last-Modified", fmt.Sprintf("%.2f", lastModified))
 		w.Write(encodedResponse)
 	}
 }

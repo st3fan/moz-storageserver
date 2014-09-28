@@ -159,24 +159,25 @@ func (odb *ObjectDatabase) DeleteObject(collectionName, objectId string) error {
 }
 
 func (odb *ObjectDatabase) DeleteObjects(collectionName string, objectIds []string) (float64, error) {
-	var lastModified float64
+	var lastModified float64 = timestampNow()
 	return lastModified, odb.db.Update(func(tx *bolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte(collectionName))
+		// The bucket must exist
+		bucket := tx.Bucket([]byte(collectionName))
+		if bucket == nil {
+			return CollectionNotFoundErr
+		}
+		// Delete the specified objects
+		for _, objectId := range objectIds {
+			if err := bucket.Delete([]byte(objectId)); err != nil {
+				return err
+			}
+		}
+		// Update meta/info
+		metaBucket, err := tx.CreateBucketIfNotExists([]byte("Collections"))
 		if err != nil {
 			return err
 		}
-
-		for _, objectId := range objectIds {
-			encodedObject := bucket.Get([]byte(objectId))
-			if encodedObject != nil {
-				if err := bucket.Delete([]byte(objectId)); err != nil {
-					return err // TODO: Or should we ignore errors?
-				}
-			}
-			return nil
-		}
-
-		return nil
+		return putEncodedObject(metaBucket, collectionName, CollectionInfo{LastModified: lastModified})
 	})
 }
 
