@@ -346,6 +346,7 @@ func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request
 		timestamp := fmt.Sprintf("%.2f", savedObject.Modified)
 
 		w.Header().Set("X-Weave-Timestamp", timestamp)
+		w.Header().Set("X-Last-Modified", timestamp)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(timestamp))
 	}
@@ -560,8 +561,11 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 			return
 		}
 
+		timestamp := fmt.Sprintf("%.2f", lastModified)
+
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("X-Last-Modified", fmt.Sprintf("%.2f", lastModified))
+		w.Header().Set("X-Weave-Timestamp", timestamp)
+		w.Header().Set("X-Last-Modified", timestamp)
 		w.Write(encodedResponse)
 	}
 }
