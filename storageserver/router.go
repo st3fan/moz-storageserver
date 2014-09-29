@@ -12,14 +12,26 @@ import (
 	"github.com/st3fan/moz-tokenserver/token"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
-// Utility functions to deal with query parameter parsing
+const MAX_LIMIT = 5000
+
+//
 
 func parseLimit(r *http.Request) int {
 	query := r.URL.Query()
 	if len(query["limit"]) != 0 {
 		limit, _ := strconv.Atoi(query["limit"][0])
+		return limit
+	}
+	return MAX_LIMIT
+}
+
+func parseOffset(r *http.Request) int {
+	query := r.URL.Query()
+	if len(query["offset"]) != 0 {
+		limit, _ := strconv.Atoi(query["offset"][0])
 		return limit
 	}
 	return 0
@@ -37,6 +49,14 @@ func parseNewer(r *http.Request) float64 {
 		return newer
 	}
 	return 0
+}
+
+func parseIds(r *http.Request) []string {
+	query := r.URL.Query()
+	if len(query["ids"]) != 0 {
+		return strings.Split(query["ids"][0], ",")
+	}
+	return nil
 }
 
 //
@@ -63,13 +83,54 @@ func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier strin
 
 func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		collectionInfo, err := c.db.GetCollectionTimestamps(credentials.Uid)
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		collectionsInfo, err := odb.GetCollectionsInfo()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		encodedObject, err := json.Marshal(collectionInfo)
+		result := make(map[string]float64)
+		for collectionName, collectionInfo := range collectionsInfo {
+			result[collectionName] = collectionInfo.LastModified
+		}
+
+		encodedObject, err := json.Marshal(result)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(encodedObject)
+		return
+	}
+}
+
+func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		collectionCounts, err := odb.GetCollectionCounts()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		encodedObject, err := json.Marshal(collectionCounts)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -83,13 +144,21 @@ func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.R
 
 func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		vars := mux.Vars(r)
-		object, err := c.db.GetObject(credentials.Uid, vars["collectionName"], vars["objectId"])
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if object == nil {
+		defer odb.Close()
+
+		vars := mux.Vars(r)
+
+		object, err := odb.GetObject(vars["collectionName"], vars["objectId"])
+		if err != nil && err != ObjectNotFoundErr {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if err == ObjectNotFoundErr {
 			http.Error(w, "Not found", http.StatusNotFound)
 			return
 		}
@@ -107,83 +176,146 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 
 func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
 		vars := mux.Vars(r)
 
 		decoder := json.NewDecoder(r.Body)
 		var object Object
-		err := decoder.Decode(&object)
+		if err := decoder.Decode(&object); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		object.Id = vars["objectId"]
+
+		savedObject, err := odb.PutObject(vars["collectionName"], object)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		modified, err := c.db.PutObject(credentials.Uid, vars["collectionName"], vars["objectId"], object)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		timestamp := fmt.Sprintf("%.2f", modified)
+		timestamp := fmt.Sprintf("%.2f", savedObject.Modified)
 
 		w.Header().Set("X-Weave-Timestamp", timestamp)
+		w.Header().Set("X-Last-Modified", timestamp)
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(timestamp))
 	}
 }
 
+func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		vars := mux.Vars(r)
+
+		err = odb.DeleteObject(vars["collectionName"], vars["objectId"])
+		if err != nil && err != ObjectNotFoundErr {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if err == ObjectNotFoundErr {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
+	}
+}
+
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+		if accepts := r.Header.Get("Accepts"); accepts != "application/json" {
+			http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
+			return
+		}
+
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
 		vars := mux.Vars(r)
-		if parseFull(r) {
-			objects, err := c.db.GetObjects(credentials.Uid, vars["collectionName"], parseLimit(r), parseNewer(r))
+
+		options, err := ParseGetObjectsOptions(r)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if options.Full {
+			objects, nextOffset, err := odb.GetObjects(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/newlines; charset=UTF-8")
+			encodedObjects, err := json.Marshal(objects)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
-			if len(objects) != 0 {
-				w.Header().Set("X-Weave-Timestamp", fmt.Sprintf("%.2f", objects[len(objects)-1].Modified))
+			if nextOffset != 0 {
+				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
 			}
-
-			for _, object := range objects {
-				encodedObject, err := json.Marshal(object)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
-				}
-				w.Write(encodedObject)
-				w.Write([]byte("\n"))
-			}
+			w.Write(encodedObjects)
 		} else {
-			// TODO: Get rid of this because I don't think it is actually used on any device?
-			objectIds, err := c.db.GetObjectIds(credentials.Uid, parseLimit(r), parseNewer(r))
+			objectIds, nextOffset, err := odb.GetObjectIds(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
 			encodedObject, err := json.Marshal(objectIds)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+
 			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objectIds)))
+			if nextOffset != 0 {
+				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
+			}
 			w.Write(encodedObject)
 		}
 	}
 }
 
-type PutObjectsResponse struct {
+type PostObjectsResponse struct {
 	Failed   map[string]string `json:"failed"`
 	Modified float64           `json:"modified"`
 	Success  []string          `json:"success"`
 }
 
-func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		vars := mux.Vars(r)
+		// We expect application/json or text/plain (from broken clients)
+		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" && contentType != "text/plain" {
+			http.Error(w, "Not Acceptable", http.StatusUnsupportedMediaType)
+			return
+		}
 
+		// Parse the incoming objects
 		decoder := json.NewDecoder(r.Body)
 		var objects []Object
 		err := decoder.Decode(&objects)
@@ -192,23 +324,15 @@ func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Reques
 			return
 		}
 
-		response := &PutObjectsResponse{
+		response := &PostObjectsResponse{
 			Failed:   map[string]string{},
 			Modified: 0,
 			Success:  []string{},
 		}
 
+		// Collect the records that are good
 		var goodObjects []Object
-
 		for i, _ := range objects {
-			// TODO: Move this defaults logic into database.go
-			if objects[i].Modified == 0 {
-				objects[i].Modified = timestampNow()
-			}
-			if objects[i].TTL == 0 {
-				objects[i].TTL = 2100000000
-			}
-
 			if err := objects[i].Validate(); err != nil {
 				response.Failed[objects[i].Id] = err.Error()
 			} else {
@@ -216,7 +340,17 @@ func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Reques
 			}
 		}
 
-		if response.Modified, err = c.db.SetObjects(credentials.Uid, vars["collectionName"], objects); err != nil {
+		// Insert or update the records
+
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		if response.Modified, err = odb.PutObjects(mux.Vars(r)["collectionName"], objects); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -233,27 +367,84 @@ func (c *handlerContext) PutObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(encodedResponse)
+
 	}
+}
+
+type DeleteCollectionObjectsResponse struct {
+	Modified float64 `json:"modified"`
 }
 
 func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		vars := mux.Vars(r)
-		err := c.db.DeleteCollectionObjects(credentials.Uid, vars["collectionName"])
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		vars := mux.Vars(r)
+
+		objectIds := parseIds(r)
+
+		var lastModified float64
+
+		if len(objectIds) != 0 {
+			lastModified, err = odb.DeleteObjects(vars["collectionName"], objectIds)
+			if err != nil {
+				if err == CollectionNotFoundErr {
+					http.Error(w, "Collection Not Found", http.StatusNotFound)
+				} else {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}
+		} else {
+			lastModified, err = odb.DeleteCollection(vars["collectionName"])
+			if err != nil {
+				if err == CollectionNotFoundErr {
+					http.Error(w, "Collection Not Found", http.StatusNotFound)
+				} else {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+				}
+			}
 		}
 
+		// Return the last modified of the collection
+
+		response := DeleteCollectionObjectsResponse{
+			Modified: lastModified,
+		}
+
+		encodedResponse, err := json.Marshal(response)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		timestamp := fmt.Sprintf("%.2f", lastModified)
+
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("{}"))
+		w.Header().Set("X-Weave-Timestamp", timestamp)
+		w.Header().Set("X-Last-Modified", timestamp)
+		w.Write(encodedResponse)
 	}
 }
 
-func (c *handlerContext) DeleteUserObjectsHandler(w http.ResponseWriter, r *http.Request) {
+func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
 	if _, credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
-		err := c.db.DeleteUserObjects(credentials.Uid)
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer odb.Close()
+
+		if err := odb.DeleteStorage(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -262,20 +453,22 @@ func (c *handlerContext) DeleteUserObjectsHandler(w http.ResponseWriter, r *http
 }
 
 func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
-	db, err := NewDatabaseSession(config.DatabaseUrl)
+	db, err := NewDatabaseSession("postgres://storageserver:storageserver@localhost/storageserver")
 	if err != nil {
 		return nil, err
 	}
 
 	context := &handlerContext{config: config, db: db}
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
+	r.HandleFunc("/1.5/{userId}/info/collection_counts", context.InfoCollectionCountsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.PutObjectHandler).Methods("PUT")
+	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.DeleteObjectHandler).Methods("DELETE")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.GetObjectsHandler).Methods("GET")
-	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.PutObjectsHandler).Methods("POST")
+	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.PostObjectsHandler).Methods("POST")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}", context.DeleteCollectionObjectsHandler).Methods("DELETE")
-	r.HandleFunc("/1.5/{userId}/storage", context.DeleteUserObjectsHandler).Methods("DELETE")
-	r.HandleFunc("/1.5/{userId}", context.DeleteUserObjectsHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}/storage", context.DeleteStorageHandler).Methods("DELETE")
+	r.HandleFunc("/1.5/{userId}", context.DeleteStorageHandler).Methods("DELETE")
 
 	return context, nil
 }
