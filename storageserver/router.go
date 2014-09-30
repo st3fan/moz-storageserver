@@ -28,15 +28,6 @@ func parseLimit(r *http.Request) int {
 	return MAX_LIMIT
 }
 
-func parseOffset(r *http.Request) int {
-	query := r.URL.Query()
-	if len(query["offset"]) != 0 {
-		limit, _ := strconv.Atoi(query["offset"][0])
-		return limit
-	}
-	return 0
-}
-
 func parseFull(r *http.Request) bool {
 	query := r.URL.Query()
 	return len(query["full"]) != 0
@@ -260,7 +251,7 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 		}
 
 		if options.Full {
-			objects, nextOffset, err := odb.GetObjects(vars["collectionName"], options)
+			objects, err := odb.GetObjects(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -274,12 +265,9 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objects)))
-			if nextOffset != 0 {
-				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
-			}
 			w.Write(encodedObjects)
 		} else {
-			objectIds, nextOffset, err := odb.GetObjectIds(vars["collectionName"], options)
+			objectIds, err := odb.GetObjectIds(vars["collectionName"], options)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -293,9 +281,6 @@ func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Reques
 
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("X-Weave-Records", strconv.Itoa(len(objectIds)))
-			if nextOffset != 0 {
-				w.Header().Set("X-Weave-Next-Offset", strconv.Itoa(nextOffset))
-			}
 			w.Write(encodedObject)
 		}
 	}
