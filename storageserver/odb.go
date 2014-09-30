@@ -98,50 +98,41 @@ func (odb *ObjectDatabase) GetCollectionCounts() (map[string]int, error) {
 }
 
 type GetObjectsOptions struct {
-	Full   bool
-	Limit  int
-	Offset int
-	Newer  float64
-	Ids    []string
+	Full  bool
+	Limit int
+	Newer float64
+	Ids   []string
 }
 
 func ParseGetObjectsOptions(r *http.Request) (*GetObjectsOptions, error) {
 	// TODO: This should also do parameter validation
 	return &GetObjectsOptions{
-		Full:   parseFull(r),
-		Limit:  parseLimit(r),
-		Offset: parseOffset(r),
-		Newer:  parseNewer(r),
-		Ids:    parseIds(r),
+		Full:  parseFull(r),
+		Limit: parseLimit(r),
+		Newer: parseNewer(r),
+		Ids:   parseIds(r),
 	}, nil
 }
 
-func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, int, error) {
+func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjectsOptions) ([]Object, error) {
 	objects := []Object{}
-	nextOffset := 0
-	return objects, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
+	return objects, odb.db.View(func(tx *bolt.Tx) error {
 		objectsBucket := tx.Bucket([]byte(collectionName))
 		if objectsBucket == nil {
 			return nil
 		}
 		if len(options.Ids) == 0 {
-			offset := 0
 			err := objectsBucket.ForEach(func(k, v []byte) error {
 				var object Object
 				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
 					return err
 				}
-				if offset >= options.Offset && object.Modified > options.Newer {
+				if object.Modified > options.Newer {
 					objects = append(objects, object)
 					if len(objects) == options.Limit {
-						stats := objectsBucket.Stats()
-						if len(objects) < stats.KeyN {
-							nextOffset = options.Offset + options.Limit
-						}
 						return IterationCancelledErr
 					}
 				}
-				offset++
 				return nil
 			})
 			if err == IterationCancelledErr {
@@ -165,32 +156,25 @@ func (odb *ObjectDatabase) GetObjects(collectionName string, options *GetObjects
 	})
 }
 
-func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, int, error) {
-	nextOffset := 0
+func (odb *ObjectDatabase) GetObjectIds(collectionName string, options *GetObjectsOptions) ([]string, error) {
 	objectIds := []string{}
-	return objectIds, nextOffset, odb.db.View(func(tx *bolt.Tx) error {
+	return objectIds, odb.db.View(func(tx *bolt.Tx) error {
 		objectsBucket := tx.Bucket([]byte(collectionName))
 		if objectsBucket == nil {
 			return nil
 		}
 		if len(options.Ids) == 0 {
-			offset := 0
 			err := objectsBucket.ForEach(func(k, v []byte) error {
 				var object Object
 				if err := getEncodedObject(objectsBucket, string(k), &object); err != nil {
 					return err
 				}
-				if offset >= options.Offset && object.Modified > options.Newer {
+				if object.Modified > options.Newer {
 					objectIds = append(objectIds, string(k))
 					if len(objectIds) == options.Limit {
-						stats := objectsBucket.Stats()
-						if len(objectIds) < stats.KeyN {
-							nextOffset = options.Offset + options.Limit
-						}
 						return IterationCancelledErr
 					}
 				}
-				offset++
 				return nil
 			})
 			if err == IterationCancelledErr {
