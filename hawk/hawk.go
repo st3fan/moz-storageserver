@@ -216,23 +216,23 @@ func calculateRequestSignature(r *http.Request, parameters Parameters, credentia
 	return mac.Sum(nil), nil
 }
 
-func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (Parameters, Credentials, bool) {
+func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (Credentials, bool) {
 	// Grab the Authorization Header
 
 	authorization := r.Header.Get("Authorization")
 	if len(authorization) == 0 {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	tokens := strings.SplitN(authorization, " ", 2)
 	if len(tokens) != 2 {
 		http.Error(w, "Unsupported authorization method", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 	if tokens[0] != "Hawk" {
 		http.Error(w, "Unsupported authorization method", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	// Parse and validate the Hawk parameters
@@ -240,7 +240,7 @@ func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (
 	parameters, err := parseParameters(tokens[1])
 	if err != nil {
 		http.Error(w, "Unable to parse Hawk parameters", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	if err = validateParameters(parameters); err != nil {
@@ -252,16 +252,16 @@ func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (
 	credentials, err := cf(r, parameters.Id)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 	if credentials == nil {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	if err := validateCredentials(*credentials); err != nil {
 		http.Error(w, "Invalid credentials: "+err.Error(), http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	// Check the Hawk request signature
@@ -269,15 +269,15 @@ func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (
 	mac, err := calculateRequestSignature(r, parameters, *credentials)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	if !bytes.Equal(mac, parameters.Mac) {
 		http.Error(w, "Signature Mismatch", http.StatusUnauthorized)
-		return Parameters{}, Credentials{}, false
+		return Credentials{}, false
 	}
 
 	// Return the credentials and parsed artifacts
 
-	return parameters, *credentials, true
+	return *credentials, true
 }
