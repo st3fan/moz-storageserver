@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gorilla/mux"
-	"github.com/st3fan/moz-storageserver/hawk"
+	"github.com/st3fan/gohawk/hawk"
 	"github.com/st3fan/moz-tokenserver/token"
 	"net/http"
 	"strconv"
@@ -53,8 +53,9 @@ func parseIds(r *http.Request) []string {
 //
 
 type handlerContext struct {
-	config Config
-	db     *DatabaseSession
+	config         Config
+	db             *DatabaseSession
+	hawkAuthorizer *hawk.Authorizer
 }
 
 func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (*hawk.Credentials, error) {
@@ -73,7 +74,7 @@ func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier strin
 // Handlers
 
 func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -106,7 +107,7 @@ func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.R
 }
 
 func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -134,7 +135,7 @@ func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *h
 }
 
 func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -166,7 +167,7 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -202,7 +203,7 @@ func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -228,7 +229,7 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 }
 
 func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		if accepts := r.Header.Get("Accepts"); accepts != "application/json" {
 			http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
 			return
@@ -293,7 +294,7 @@ type PostObjectsResponse struct {
 }
 
 func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		// We expect application/json or text/plain (from broken clients)
 		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" && contentType != "text/plain" {
 			http.Error(w, "Not Acceptable", http.StatusUnsupportedMediaType)
@@ -361,7 +362,7 @@ type DeleteCollectionObjectsResponse struct {
 }
 
 func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -418,7 +419,7 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 }
 
 func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := hawk.Authorize(w, r, c.GetHawkCredentials); ok {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -444,6 +445,8 @@ func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
 	}
 
 	context := &handlerContext{config: config, db: db}
+	context.hawkAuthorizer = hawk.NewAuthorizer(context.GetHawkCredentials, hawk.NewMemoryBackedReplayChecker())
+
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/info/collection_counts", context.InfoCollectionCountsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/storage/{collectionName}/{objectId}", context.GetObjectHandler).Methods("GET")
