@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strconv"
@@ -17,9 +18,17 @@ import (
 	"text/scanner"
 )
 
-//
+type Authorizer struct {
+	cf            CredentialsFunction
+	replayChecker ReplayChecker
+}
 
-//
+func NewAuthorizer(cf CredentialsFunction, replayChecker ReplayChecker) *Authorizer {
+	return &Authorizer{
+		cf:            cf,
+		replayChecker: replayChecker,
+	}
+}
 
 type Credentials struct {
 	KeyIdentifier string
@@ -216,7 +225,7 @@ func calculateRequestSignature(r *http.Request, parameters Parameters, credentia
 	return mac.Sum(nil), nil
 }
 
-func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (Credentials, bool) {
+func (a *Authorizer) Authorize(w http.ResponseWriter, r *http.Request) (Credentials, bool) {
 	// Grab the Authorization Header
 
 	authorization := r.Header.Get("Authorization")
@@ -245,11 +254,35 @@ func Authorize(w http.ResponseWriter, r *http.Request, cf CredentialsFunction) (
 
 	if err = validateParameters(parameters); err != nil {
 		http.Error(w, "Invalid Hawk parameters: "+err.Error(), http.StatusUnauthorized)
+		return Credentials{}, false
+	}
+
+	// TODO: Check if this request has expired
+
+	// Check if we have seen this request before
+
+	requestId := fmt.Sprintf("%s:%d:%s", parameters.Timestamp, parameters.Id, parameters.Nonce)
+
+	seenBefore, err := a.replayChecker.Check(requestId)
+	if err != nil {
+		// TODO: Unable to check means server error. Is there a better strategy?
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return Credentials{}, false
+	}
+
+	if seenBefore {
+		http.Error(w, "Request has been seen before", http.StatusUnauthorized)
+		return Credentials{}, false
+	}
+
+	if err := a.replayChecker.Remember(requestId); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return Credentials{}, false
 	}
 
 	// Find the user and keys
 
-	credentials, err := cf(r, parameters.Id)
+	credentials, err := a.cf(r, parameters.Id)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return Credentials{}, false
