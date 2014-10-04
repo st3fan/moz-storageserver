@@ -53,9 +53,9 @@ func parseIds(r *http.Request) []string {
 //
 
 type AppContext struct {
-	config         Config
-	db             *DatabaseSession
-	hawkAuthorizer *hawk.Authorizer
+	config            Config
+	db                *DatabaseSession
+	hawkAuthenticator *hawk.Authenticator
 }
 
 type AppCredentials struct {
@@ -82,8 +82,8 @@ func (c *AppContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (
 	}, nil
 }
 
-func (c *AppContext) Authorize(w http.ResponseWriter, r *http.Request) (*AppCredentials, bool) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
+func (c *AppContext) Authenticate(w http.ResponseWriter, r *http.Request) (*AppCredentials, bool) {
+	if credentials, ok := c.hawkAuthenticator.Authenticate(w, r); ok {
 		return credentials.(*AppCredentials), true
 	} else {
 		return nil, false
@@ -93,7 +93,7 @@ func (c *AppContext) Authorize(w http.ResponseWriter, r *http.Request) (*AppCred
 // Handlers
 
 func (c *AppContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -126,7 +126,7 @@ func (c *AppContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Reque
 }
 
 func (c *AppContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -154,7 +154,7 @@ func (c *AppContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.
 }
 
 func (c *AppContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -186,7 +186,7 @@ func (c *AppContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *AppContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -222,7 +222,7 @@ func (c *AppContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *AppContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -248,7 +248,7 @@ func (c *AppContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (c *AppContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		if accepts := r.Header.Get("Accepts"); accepts != "application/json" {
 			http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
 			return
@@ -313,7 +313,7 @@ type PostObjectsResponse struct {
 }
 
 func (c *AppContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		// We expect application/json or text/plain (from broken clients)
 		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" && contentType != "text/plain" {
 			http.Error(w, "Not Acceptable", http.StatusUnsupportedMediaType)
@@ -381,7 +381,7 @@ type DeleteCollectionObjectsResponse struct {
 }
 
 func (c *AppContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -438,7 +438,7 @@ func (c *AppContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *ht
 }
 
 func (c *AppContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.Authorize(w, r); ok {
+	if credentials, ok := c.Authenticate(w, r); ok {
 		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
@@ -464,7 +464,7 @@ func SetupRouter(r *mux.Router, config Config) (*AppContext, error) {
 	}
 
 	context := &AppContext{config: config, db: db}
-	context.hawkAuthorizer = hawk.NewAuthorizer(context.GetHawkCredentials, hawk.NewMemoryBackedReplayChecker())
+	context.hawkAuthenticator = hawk.NewAuthenticator(context.GetHawkCredentials, hawk.NewMemoryBackedReplayChecker())
 
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/info/collection_counts", context.InfoCollectionCountsHandler).Methods("GET")
