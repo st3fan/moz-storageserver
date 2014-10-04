@@ -52,30 +52,49 @@ func parseIds(r *http.Request) []string {
 
 //
 
-type handlerContext struct {
+type AppContext struct {
 	config         Config
 	db             *DatabaseSession
 	hawkAuthorizer *hawk.Authorizer
 }
 
-func (c *handlerContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (*hawk.Credentials, error) {
+type AppCredentials struct {
+	key hawk.Key
+	uid uint64
+}
+
+func (c *AppCredentials) Key() hawk.Key {
+	return c.key
+}
+
+func (c *AppContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (hawk.Credentials, error) {
 	token, err := token.ParseToken([]byte(c.config.SharedSecret), keyIdentifier)
 	if err != nil {
 		return nil, err
 	}
-	return &hawk.Credentials{
-		Key:           []byte(token.DerivedSecret),
-		Algorithm:     "sha256",
-		KeyIdentifier: keyIdentifier,
-		Uid:           token.Payload.Uid,
+	return &AppCredentials{
+		key: hawk.Key{
+			Secret:     []byte(token.DerivedSecret),
+			Algorithm:  "sha256",
+			Identifier: keyIdentifier,
+		},
+		uid: token.Payload.Uid,
 	}, nil
+}
+
+func (c *AppContext) Authorize(w http.ResponseWriter, r *http.Request) (*AppCredentials, bool) {
+	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
+		return credentials.(*AppCredentials), true
+	} else {
+		return nil, false
+	}
 }
 
 // Handlers
 
-func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -106,9 +125,9 @@ func (c *handlerContext) InfoCollectionsHandler(w http.ResponseWriter, r *http.R
 	}
 }
 
-func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -134,9 +153,9 @@ func (c *handlerContext) InfoCollectionCountsHandler(w http.ResponseWriter, r *h
 	}
 }
 
-func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) GetObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -166,9 +185,9 @@ func (c *handlerContext) GetObjectHandler(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -202,9 +221,9 @@ func (c *handlerContext) PutObjectHandler(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -228,14 +247,14 @@ func (c *handlerContext) DeleteObjectHandler(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-func (c *handlerContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
+func (c *AppContext) GetObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
 		if accepts := r.Header.Get("Accepts"); accepts != "application/json" {
 			http.Error(w, "Not Acceptable", http.StatusNotAcceptable)
 			return
 		}
 
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -293,8 +312,8 @@ type PostObjectsResponse struct {
 	Success  []string          `json:"success"`
 }
 
-func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
+func (c *AppContext) PostObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
 		// We expect application/json or text/plain (from broken clients)
 		if contentType := r.Header.Get("Content-Type"); contentType != "application/json" && contentType != "text/plain" {
 			http.Error(w, "Not Acceptable", http.StatusUnsupportedMediaType)
@@ -328,7 +347,7 @@ func (c *handlerContext) PostObjectsHandler(w http.ResponseWriter, r *http.Reque
 
 		// Insert or update the records
 
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -361,9 +380,9 @@ type DeleteCollectionObjectsResponse struct {
 	Modified float64 `json:"modified"`
 }
 
-func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -418,9 +437,9 @@ func (c *handlerContext) DeleteCollectionObjectsHandler(w http.ResponseWriter, r
 	}
 }
 
-func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
-	if credentials, ok := c.hawkAuthorizer.Authorize(w, r); ok {
-		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.Uid)
+func (c *AppContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Request) {
+	if credentials, ok := c.Authorize(w, r); ok {
+		path := fmt.Sprintf("%s/%d.db", c.config.DatabaseRootPath, credentials.uid)
 		odb, err := OpenObjectDatabase(path)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -438,13 +457,13 @@ func (c *handlerContext) DeleteStorageHandler(w http.ResponseWriter, r *http.Req
 	}
 }
 
-func SetupRouter(r *mux.Router, config Config) (*handlerContext, error) {
+func SetupRouter(r *mux.Router, config Config) (*AppContext, error) {
 	db, err := NewDatabaseSession("postgres://storageserver:storageserver@localhost/storageserver")
 	if err != nil {
 		return nil, err
 	}
 
-	context := &handlerContext{config: config, db: db}
+	context := &AppContext{config: config, db: db}
 	context.hawkAuthorizer = hawk.NewAuthorizer(context.GetHawkCredentials, hawk.NewMemoryBackedReplayChecker())
 
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
