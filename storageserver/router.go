@@ -58,21 +58,27 @@ type AppContext struct {
 	hawkAuthenticator *hawk.Authenticator
 }
 
-type AppCredentials struct {
+type Credentials struct {
 	key hawk.Key
 	uid uint64
 }
 
-func (c *AppCredentials) Key() hawk.Key {
+func (c *Credentials) Key() hawk.Key {
 	return c.key
 }
 
-func (c *AppContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (hawk.Credentials, error) {
-	token, err := token.ParseToken([]byte(c.config.SharedSecret), keyIdentifier)
+//
+
+type CredentialsStore struct {
+	sharedSecret string
+}
+
+func (cs *CredentialsStore) CredentialsForKeyIdentifier(keyIdentifier string) (hawk.Credentials, error) {
+	token, err := token.ParseToken([]byte(cs.sharedSecret), keyIdentifier)
 	if err != nil {
 		return nil, err
 	}
-	return &AppCredentials{
+	return &Credentials{
 		key: hawk.Key{
 			Secret:     []byte(token.DerivedSecret),
 			Algorithm:  "sha256",
@@ -82,9 +88,9 @@ func (c *AppContext) GetHawkCredentials(r *http.Request, keyIdentifier string) (
 	}, nil
 }
 
-func (c *AppContext) Authenticate(w http.ResponseWriter, r *http.Request) (*AppCredentials, bool) {
+func (c *AppContext) Authenticate(w http.ResponseWriter, r *http.Request) (*Credentials, bool) {
 	if credentials, ok := c.hawkAuthenticator.Authenticate(w, r); ok {
-		return credentials.(*AppCredentials), true
+		return credentials.(*Credentials), true
 	} else {
 		return nil, false
 	}
@@ -463,8 +469,12 @@ func SetupRouter(r *mux.Router, config Config) (*AppContext, error) {
 		return nil, err
 	}
 
+	credentialsStore := &CredentialsStore{
+		sharedSecret: config.SharedSecret,
+	}
+
 	context := &AppContext{config: config, db: db}
-	context.hawkAuthenticator = hawk.NewAuthenticator(context.GetHawkCredentials, hawk.NewMemoryBackedReplayChecker())
+	context.hawkAuthenticator = hawk.NewAuthenticator(credentialsStore, hawk.NewMemoryBackedReplayChecker())
 
 	r.HandleFunc("/1.5/{userId}/info/collections", context.InfoCollectionsHandler).Methods("GET")
 	r.HandleFunc("/1.5/{userId}/info/collection_counts", context.InfoCollectionCountsHandler).Methods("GET")
